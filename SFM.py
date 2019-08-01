@@ -56,14 +56,16 @@ if __name__ == "__main__":
         R1t1 = np.hstack((R1, t1))
         cameraPosition = np.matmul(R1t1, cameraPosition)
 
+        # Save ground truth camera position (translation) for this frame    
+        _, truthR, truthT = dataReader.readCameraParams(frameIdx)    
+        truthCameras3D.append(truthT.flatten())
+
         # Normalize points (using camera matrix K) and compute their 3D positions, then convert to heterogeneous coords.
         normPrevPtsT = np.transpose(normalizePointsWithCameraMatrix(prevPts, K))
         normCurrPtsT = np.transpose(normalizePointsWithCameraMatrix(currPts, K))
         reprojectedPts = cv2.triangulatePoints(np.eye(3, 4), np.hstack((R, t)), normPrevPtsT, normCurrPtsT)
+        # reprojectedPts = cv2.triangulatePoints(np.eye(3, 4), np.hstack((truthR, truthT.transpose())), normPrevPtsT, normCurrPtsT)
         reprojectedPts = [[x/w, y/w, z/w] for [x, y, z, w] in np.transpose(reprojectedPts)]
-
-        # Save ground truth camera position (translation) for this frame        
-        truthCameras3D.append(dataReader.readCameraParams(frameIdx)[2].flatten())
 
         # Save 3D point and its computed color for this frame
         points3D += reprojectedPts

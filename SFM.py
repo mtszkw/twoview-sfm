@@ -10,10 +10,17 @@ if __name__ == "__main__":
     np.set_printoptions(precision=3)
     np.set_printoptions(suppress=True)
 
-    dataReader = DataReader(datasetDirectory="data/temple/") # http://vision.middlebury.edu/mview/data/
+    # Source: http://vision.middlebury.edu/mview/data/
+    # Structure of datasetDirectory:
+    # /data/temple
+    # |_ temple_ang.txt
+    # |_ temple_par.txt
+    # |_ temple0001.png
+    # |_ ...
+    dataReader = DataReader(datasetDirectory="data/temple/")
 
     matcher = cv2.BFMatcher()
-    sift = cv2.xfeatures2d.SIFT_create(nfeatures=100)
+    sift = cv2.xfeatures2d.SIFT_create()
     K, _, _ = dataReader.readCameraParams()
     cameraPosition = np.array([[0], [0], [0], [1]])
     print(f"\nIntrinsic parameters matrix:\n{K}")    
@@ -38,6 +45,7 @@ if __name__ == "__main__":
         _, R, t, inlierMask = cv2.recoverPose(E, currPts, prevPts, K, mask=inlierMask)
         print(f"Rotation R = {R.flatten()}\nTranslation t = {t.flatten()}\nEssential matrix: = {E.flatten()}")
             
+        # Filter outliers using a mask obtained from RANSAC
         prevPts, currPts = inlierMaskFilter(prevPts, currPts, inlierMask)
         if len(prevPts) == 0:
             continue
@@ -54,10 +62,8 @@ if __name__ == "__main__":
         reprojectedPts = cv2.triangulatePoints(np.eye(3, 4), np.hstack((R, t)), normPrevPtsT, normCurrPtsT)
         reprojectedPts = [[x/w, y/w, z/w] for [x, y, z, w] in np.transpose(reprojectedPts)]
 
-        # Save ground truth camera position for this frame        
-        _, truthCamR, truthCamT = dataReader.readCameraParams(frameIdx)
-        # truthCamPos = - truthCamR.transpose() * truthCamT
-        truthCameras3D.append(truthCamT.flatten())
+        # Save ground truth camera position (translation) for this frame        
+        truthCameras3D.append(dataReader.readCameraParams(frameIdx)[2].flatten())
 
         # Save 3D point and its computed color for this frame
         points3D += reprojectedPts

@@ -1,70 +1,79 @@
 import cv2
-import plyfile
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+
 from DataReader import DataReader
+from Filtering import LoweRatioFilter, inlierMaskFilter
+from PointCloud import savePointCloud, normalizePointsWithCameraMatrix
 
-np.set_printoptions(precision=3)
-np.set_printoptions(suppress=True)
 
-# http://vision.middlebury.edu/mview/data/
-dataReader = DataReader(datasetDirectory="data/temple/")
+if __name__ == "__main__":
+    np.set_printoptions(precision=3)
+    np.set_printoptions(suppress=True)
 
-matcher = cv2.BFMatcher()
-sift = cv2.xfeatures2d.SIFT_create()
-K, _, _ = dataReader.readCameraParams()
-print(f"\nIntrinsic parameters matrix:\n{K}")
+    # Source: http://vision.middlebury.edu/mview/data/
+    # Structure of datasetDirectory:
+    # /data/temple
+    # |_ temple_ang.txt
+    # |_ temple_par.txt
+    # |_ temple0001.png
+    # |_ ...
+    dataReader = DataReader(datasetDirectory="data/temple/")
 
-cloudPoints, cloudColors = [], []
-imagesCount = dataReader.getImagesCount() - 1
-
-for frameIdx in range(2, imagesCount):
-    prevFrame = dataReader.readFrame(frameIdx-1, convertToRGB=True)
-    currFrame = dataReader.readFrame(frameIdx, convertToRGB=True)
-    prevKeypts, prevDescr = sift.detectAndCompute(prevFrame, mask=None)
-    currKeypts, currDescr = sift.detectAndCompute(currFrame, mask=None)
-
-    matches = matcher.knnMatch(queryDescriptors=prevDescr, trainDescriptors=currDescr, k=2)
-    print(f"\nMatching: Found {len(matches)} matches betweens frames ({frameIdx-1}, {frameIdx}).")
-
-    goodMatches = [m for m, n in matches if m.distance < 0.8*n.distance]        
-    prevPts = [prevKeypts[m.queryIdx].pt for m in goodMatches]
-    currPts = [currKeypts[m.trainIdx].pt for m in goodMatches]
-    print(f"Lowe-Ratio filter: {len(goodMatches)} matches left (ratio = 0.8).")
-
-    prevPts = np.array(prevPts)
-    currPts = np.array(currPts)
-    E, inlierMask = cv2.findEssentialMat(currPts, prevPts, K, cv2.RANSAC, 0.99, 1.0, None)
-    _, R, t, inlierMask = cv2.recoverPose(E, currPts, prevPts, K, mask=inlierMask)
-    prevPts = np.array([pt for (idx, pt) in enumerate(prevPts) if inlierMask[idx] == 1])
-    currPts = np.array([pt for (idx, pt) in enumerate(currPts) if inlierMask[idx] == 1])
-    print(f"RANSAC filter: {len(prevPts)} keypoints left after applying inlier mask.")
-    print("Rotation R =", R.flatten())
-    print("Translation t =", t.flatten())
-    print("Essential matrix:", E.flatten())
-
-    if len(prevPts) == 0:
-        continue
-
-    P1 = np.eye(3, 4)
-    P2 = np.hstack((R, t))
-    focal, cx, cy = K[0, 0], K[0, 2], K[1, 2]
-    normPrevPts = np.array([ [(p[0]-cx)/focal, (p[1]-cy)/focal] for p in prevPts])
-    normCurrPts = np.array([ [(p[0]-cx)/focal, (p[1]-cy)/focal] for p in currPts])
-    points3D = cv2.triangulatePoints(P1, P2, np.transpose(normPrevPts), np.transpose(normCurrPts))
-    points3D = [[x/w, y/w, z/w] for [x, y, z, w] in np.transpose(points3D)] # Convert to heterogeneous
+    matcher = cv2.BFMatcher()
+    sift = cv2.xfeatures2d.SIFT_create()
+    K, _, _ = dataReader.readCameraParams()
+    cameraPosition = np.array([[0], [0], [0], [1]])
+    print(f"\nIntrinsic parameters matrix:\n{K}")    
     
-    cloudPoints += points3D
-    cloudColors += [prevFrame[int(pt[1]), int(pt[0])] for pt in prevPts]
+    points3D, colors3D = [], []
+    cameras3D, truthCameras3D = [], []
 
-print(f"\nReconstructed total {len(cloudPoints)} points from {imagesCount} frames.")
+    firstFrame, numFrames = 40, 10
 
-vertexes = [ (p[0], p[1], p[2], c[0], c[1], c[2]) for p, c in zip(cloudPoints, cloudColors)]
-vertexes = [ v for v in vertexes if v[2] >= 0 ] # Discard negative z
-dtypes = [('x', 'f8'), ('y', 'f8'), ('z', 'f8'), ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-array = np.array(vertexes, dtype=dtypes)
-element = plyfile.PlyElement.describe(array, "vertex")
-plyfile.PlyData([element]).write("sfm_cloud.ply")
+    for frameIdx in range(firstFrame, firstFrame+numFrames):
+        prevFrame = dataReader.readFrame(frameIdx, convertToRGB=True)
+        currFrame = dataReader.readFrame(frameIdx+1, convertToRGB=True)
+        prevKeypts, prevDescr = sift.detectAndCompute(prevFrame, mask=None)
+        currKeypts, currDescr = sift.detectAndCompute(currFrame, mask=None)
 
-print(f"\nSample 3D points with colors:\n", vertexes[:10])
+        matches = matcher.knnMatch(queryDescriptors=prevDescr, trainDescriptors=currDescr, k=2)
+        print(f"\nMatching: Found {len(matches)} matches betweens frames ({frameIdx}, {frameIdx+1}).")
+
+        _, prevPts, currPts = LoweRatioFilter(matches, prevKeypts, currKeypts)
+
+        E, inlierMask = cv2.findEssentialMat(currPts, prevPts, K, cv2.RANSAC, 0.99, 1.0, None)
+        _, R, t, inlierMask = cv2.recoverPose(E, currPts, prevPts, K, mask=inlierMask)
+        print(f"Rotation R = {R.flatten()}\nTranslation t = {t.flatten()}\nEssential matrix: = {E.flatten()}")
+            
+        # Filter outliers using a mask obtained from RANSAC
+        prevPts, currPts = inlierMaskFilter(prevPts, currPts, inlierMask)
+        if len(prevPts) == 0:
+            continue
+
+        # Computing current camera position
+        R1 = np.vstack(( R, np.zeros((1, 3)) ))
+        t1 = np.vstack(( t, np.ones((1, 1)) ))
+        R1t1 = np.hstack((R1, t1))
+        cameraPosition = np.matmul(R1t1, cameraPosition)
+
+        # Save ground truth camera position (translation) for this frame    
+        _, truthR, truthT = dataReader.readCameraParams(frameIdx)    
+        truthCameras3D.append(truthT.flatten())
+
+        # Normalize points (using camera matrix K) and compute their 3D positions, then convert to heterogeneous coords.
+        normPrevPtsT = np.transpose(normalizePointsWithCameraMatrix(prevPts, K))
+        normCurrPtsT = np.transpose(normalizePointsWithCameraMatrix(currPts, K))
+        reprojectedPts = cv2.triangulatePoints(np.eye(3, 4), np.hstack((R, t)), normPrevPtsT, normCurrPtsT)
+        # reprojectedPts = cv2.triangulatePoints(np.eye(3, 4), np.hstack((truthR, truthT.transpose())), normPrevPtsT, normCurrPtsT)
+        reprojectedPts = [[x/w, y/w, z/w] for [x, y, z, w] in np.transpose(reprojectedPts)]
+
+        # Save 3D point and its computed color for this frame
+        points3D += reprojectedPts
+        cameras3D.append(cameraPosition.flatten())
+        colors3D += [prevFrame[int(pt[1]), int(pt[0])] for pt in prevPts]
+
+    savePointCloud(points3D, colors3D, "sfm_cloud.ply")
+    savePointCloud(cameras3D, [(255,255,255)]*len(cameras3D), "sfm_cameras.ply")
+    savePointCloud(truthCameras3D, [(50,255,50)]*len(truthCameras3D), "sfm_truthCameras.ply")
+
+    print(f"\nReconstructed total {len(points3D)} points from {numFrames} frames.")  

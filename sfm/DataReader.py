@@ -3,11 +3,11 @@ import cv2
 import numpy as np
 
 class DataReader:
-    def __init__(self, datasetDirectory):
+    def __init__(self, datasetDirectory, calibSubdir="", imagesSubdir="", fileExtension=".jpg"):
         self._datasetDirectory = datasetDirectory
-        self._imageExtension = ".JPG"
-        self._calibDirectory = os.path.join(datasetDirectory, "dslr_calibration_undistorted")
-        self._imagesDirectory = os.path.join(datasetDirectory, os.path.join("images", "dslr_images_undistorted"))
+        self._imageExtension = fileExtension
+        self._calibDirectory = os.path.join(datasetDirectory, calibSubdir)
+        self._imagesDirectory = os.path.join(datasetDirectory, imagesSubdir)
 
         self._imagesCount = len([i for i in os.listdir(self._imagesDirectory) if i.endswith(self._imageExtension)])
         print(f"Found {self._imagesCount} images in {self._imagesDirectory} dataset.")
